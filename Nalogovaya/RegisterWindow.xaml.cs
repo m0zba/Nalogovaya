@@ -3,6 +3,7 @@ using System;
 using System.Data;
 using Microsoft.Data.SqlClient;
 using System.Windows;
+using System.Windows.Media;
 
 namespace Nalogovaya
 {
@@ -11,9 +12,50 @@ namespace Nalogovaya
         private readonly string connectionString =
             @"Server=localhost\SQLEXPRESS;Database=Nalogovaya;Trusted_Connection=True;TrustServerCertificate=True;";
 
+        private string selectedRole = "User";
+
         public RegisterWindow()
         {
             InitializeComponent();
+            UpdateRoleButtons();
+        }
+
+        private void AdminRoleButton_Click(object sender, RoutedEventArgs e)
+        {
+            selectedRole = "Admin";
+            UpdateRoleButtons();
+            MessageText.Text = "";
+        }
+
+        private void EditorRoleButton_Click(object sender, RoutedEventArgs e)
+        {
+            selectedRole = "Editor";
+            UpdateRoleButtons();
+            MessageText.Text = "";
+        }
+
+        private void UserRoleButton_Click(object sender, RoutedEventArgs e)
+        {
+            selectedRole = "User";
+            UpdateRoleButtons();
+            MessageText.Text = "";
+        }
+
+        private void UpdateRoleButtons()
+        {
+            AdminRoleButton.Background = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(
+                    selectedRole == "Admin" ? "#4F3021" : "#79553D"));
+
+            EditorRoleButton.Background = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(
+                    selectedRole == "Editor" ? "#4F3021" : "#79553D"));
+
+            UserRoleButton.Background = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString(
+                    selectedRole == "User" ? "#4F3021" : "#79553D"));
+
+            SelectedRoleText.Text = "Выбрана роль: " + selectedRole;
         }
 
         private void RegisterButton_Click(object sender, RoutedEventArgs e)
@@ -23,7 +65,6 @@ namespace Nalogovaya
             string password = PasswordInput.Password;
             string confirmPassword = ConfirmPasswordInput.Password;
 
-            // Проверка заполнения всех полей
             if (string.IsNullOrWhiteSpace(fullName) ||
                 string.IsNullOrWhiteSpace(login) ||
                 string.IsNullOrWhiteSpace(password) ||
@@ -33,37 +74,20 @@ namespace Nalogovaya
                 return;
             }
 
-            // Проверка длины ФИО
-            if (fullName.Length < 5)
+            if (fullName.Length < 5 || fullName.Length > 150)
             {
                 MessageText.Text =
-                    "ФИО должно содержать минимум 5 символов.";
+                    "ФИО должно содержать от 5 до 150 символов.";
                 return;
             }
 
-            if (fullName.Length > 200)
+            if (login.Length < 4 || login.Length > 50)
             {
                 MessageText.Text =
-                    "ФИО не должно превышать 200 символов.";
+                    "Логин должен содержать от 4 до 50 символов.";
                 return;
             }
 
-            // Проверка длины логина
-            if (login.Length < 4)
-            {
-                MessageText.Text =
-                    "Логин должен содержать минимум 4 символа.";
-                return;
-            }
-
-            if (login.Length > 100)
-            {
-                MessageText.Text =
-                    "Логин не должен превышать 100 символов.";
-                return;
-            }
-
-            // Проверка длины пароля
             if (password.Length < 8)
             {
                 MessageText.Text =
@@ -71,12 +95,13 @@ namespace Nalogovaya
                 return;
             }
 
-            // Проверка совпадения паролей
             if (password != confirmPassword)
             {
                 MessageText.Text = "Пароли не совпадают.";
                 return;
             }
+
+            string passwordHash = PasswordHelper.HashPassword(password);
 
             try
             {
@@ -85,69 +110,124 @@ namespace Nalogovaya
                 {
                     connection.Open();
 
-                    // Проверяем, существует ли такой логин
-                    string checkSql = @"
-                        SELECT COUNT(*)
-                        FROM dbo.Users
-                        WHERE Login = @Login";
-
-                    using (SqlCommand checkCommand =
-                           new SqlCommand(checkSql, connection))
+                    using (SqlTransaction transaction =
+                           connection.BeginTransaction(IsolationLevel.Serializable))
                     {
-                        checkCommand.Parameters.Add(
-                            "@Login", SqlDbType.NVarChar, 100).Value = login;
-
-                        int existingUsers =
-                            Convert.ToInt32(checkCommand.ExecuteScalar());
-
-                        if (existingUsers > 0)
+                        try
                         {
-                            MessageText.Text =
-                                "Этот логин уже занят. Выберите другой.";
-                            return;
+                            // Проверяем, занят ли логин.
+                            string checkLoginSql = @"
+                                SELECT COUNT(*)
+                                FROM dbo.Users WITH (UPDLOCK, HOLDLOCK)
+                                WHERE Login = @Login";
+
+                            using (SqlCommand command =
+                                   new SqlCommand(checkLoginSql, connection, transaction))
+                            {
+                                command.Parameters.Add(
+                                    "@Login", SqlDbType.NVarChar, 50).Value = login;
+
+                                int existingUsers = Convert.ToInt32(
+                                    command.ExecuteScalar());
+
+                                if (existingUsers > 0)
+                                {
+                                    transaction.Rollback();
+                                    MessageText.Text =
+                                        "Этот логин уже занят. Выберите другой.";
+                                    return;
+                                }
+                            }
+
+                            // Ограничиваем количество активных аккаунтов.
+                            if (selectedRole == "Admin" ||
+                                selectedRole == "Editor")
+                            {
+                                string countRoleSql = @"
+                                    SELECT COUNT(*)
+                                    FROM dbo.Users WITH (UPDLOCK, HOLDLOCK)
+                                    WHERE Role = @Role AND IsActive = 1";
+
+                                using (SqlCommand command =
+                                       new SqlCommand(countRoleSql, connection, transaction))
+                                {
+                                    command.Parameters.Add(
+                                        "@Role", SqlDbType.NVarChar, 30)
+                                        .Value = selectedRole;
+
+                                    int roleCount = Convert.ToInt32(
+                                        command.ExecuteScalar());
+
+                                    int roleLimit =
+                                        selectedRole == "Admin" ? 1 : 3;
+
+                                    if (roleCount >= roleLimit)
+                                    {
+                                        transaction.Rollback();
+
+                                        MessageText.Text =
+                                            selectedRole == "Admin"
+                                            ? "Администратор уже существует. Разрешён только 1 активный Admin."
+                                            : "Достигнут лимит: разрешено максимум 3 активных Editor.";
+
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Создаём пользователя с выбранной ролью.
+                            string insertSql = @"
+                                INSERT INTO dbo.Users
+                                    (Login, PasswordHash, FullName, Role, IsActive)
+                                VALUES
+                                    (@Login, @PasswordHash, @FullName, @Role, @IsActive)";
+
+                            using (SqlCommand command =
+                                   new SqlCommand(insertSql, connection, transaction))
+                            {
+                                command.Parameters.Add(
+                                    "@Login", SqlDbType.NVarChar, 50).Value = login;
+
+                                command.Parameters.Add(
+                                    "@PasswordHash", SqlDbType.NVarChar, 500)
+                                    .Value = passwordHash;
+
+                                command.Parameters.Add(
+                                    "@FullName", SqlDbType.NVarChar, 150)
+                                    .Value = fullName;
+
+                                command.Parameters.Add(
+                                    "@Role", SqlDbType.NVarChar, 30)
+                                    .Value = selectedRole;
+
+                                command.Parameters.Add(
+                                    "@IsActive", SqlDbType.Bit).Value = true;
+
+                                command.ExecuteNonQuery();
+                            }
+
+                            transaction.Commit();
                         }
-                    }
+                        catch
+                        {
+                            try
+                            {
+                                transaction.Rollback();
+                            }
+                            catch
+                            {
+                                // Транзакция могла уже завершиться.
+                            }
 
-                    // Хешируем пароль перед сохранением
-                    string passwordHash =
-                        PasswordHelper.HashPassword(password);
-
-                    // Создаём обычного пользователя, не администратора
-                    string insertSql = @"
-                        INSERT INTO dbo.Users
-                            (Login, PasswordHash, FullName, Role, IsActive)
-                        VALUES
-                            (@Login, @PasswordHash, @FullName, @Role, @IsActive)";
-
-                    using (SqlCommand insertCommand =
-                           new SqlCommand(insertSql, connection))
-                    {
-                        insertCommand.Parameters.Add(
-                            "@Login", SqlDbType.NVarChar, 100).Value = login;
-
-                        insertCommand.Parameters.Add(
-                            "@PasswordHash", SqlDbType.NVarChar, 500)
-                            .Value = passwordHash;
-
-                        insertCommand.Parameters.Add(
-                            "@FullName", SqlDbType.NVarChar, 200)
-                            .Value = fullName;
-
-                        insertCommand.Parameters.Add(
-                            "@Role", SqlDbType.NVarChar, 50)
-                            .Value = "User";
-
-                        insertCommand.Parameters.Add(
-                            "@IsActive", SqlDbType.Bit)
-                            .Value = true;
-
-                        insertCommand.ExecuteNonQuery();
+                            throw;
+                        }
                     }
                 }
 
                 MessageBox.Show(
                     "Регистрация прошла успешно!\n" +
-                    "Теперь вы можете войти под своим логином.",
+                    "Логин: " + login + "\n" +
+                    "Роль: " + selectedRole,
                     "Регистрация",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
