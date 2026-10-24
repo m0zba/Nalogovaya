@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Data;
 using System.Windows;
 using System.Windows.Controls;
@@ -87,23 +86,57 @@ namespace Nalogovaya
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
+            // Проверяем выбор проекта.
             if (ProjectComboBox.SelectedValue == null)
             {
-                MessageBox.Show("Выберите проект.");
+                MessageBox.Show(
+                    "Выберите проект.",
+                    "Проверка данных",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                ProjectComboBox.Focus();
                 return;
             }
 
+            // Проверяем название задачи.
             if (string.IsNullOrWhiteSpace(TitleTextBox.Text))
             {
-                MessageBox.Show("Введите название задачи.");
+                MessageBox.Show(
+                    "Введите название задачи.",
+                    "Проверка данных",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
                 TitleTextBox.Focus();
                 return;
             }
 
+            // Проверяем приоритет и статус.
             if (PriorityComboBox.SelectedItem == null ||
                 StatusComboBox.SelectedItem == null)
             {
-                MessageBox.Show("Выберите приоритет и статус.");
+                MessageBox.Show(
+                    "Выберите приоритет и статус.",
+                    "Проверка данных",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                return;
+            }
+
+            // Проверяем срок выполнения.
+            // Дату можно не указывать, но нельзя выбирать прошедшую дату.
+            if (DueDatePicker.SelectedDate.HasValue &&
+                DueDatePicker.SelectedDate.Value.Date < DateTime.Today)
+            {
+                MessageBox.Show(
+                    "Срок выполнения не может быть раньше сегодняшней даты.",
+                    "Проверка даты",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                DueDatePicker.Focus();
                 return;
             }
 
@@ -167,11 +200,13 @@ namespace Nalogovaya
 
                         command.Parameters.Add(
                             "@Status", SqlDbType.NVarChar, 50).Value =
-                            ((ComboBoxItem)StatusComboBox.SelectedItem).Content.ToString();
+                            ((ComboBoxItem)StatusComboBox.SelectedItem)
+                                .Content.ToString();
 
                         command.Parameters.Add(
                             "@Priority", SqlDbType.NVarChar, 50).Value =
-                            ((ComboBoxItem)PriorityComboBox.SelectedItem).Content.ToString();
+                            ((ComboBoxItem)PriorityComboBox.SelectedItem)
+                                .Content.ToString();
 
                         connection.Open();
                         command.ExecuteNonQuery();
